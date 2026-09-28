@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AuthController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\WalletController;
+use App\Http\Controllers\Api\TransferController;
 
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
@@ -12,6 +13,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::get('/wallets', [WalletController::class, 'index']);
     Route::post('/wallets/fund', [WalletController::class, 'fund']);
+    Route::post('/transfers', [TransferController::class, 'store']);
 
     // Wallet, transfer, and transaction routes will go here next.
 });
