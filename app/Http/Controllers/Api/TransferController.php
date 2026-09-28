@@ -24,13 +24,11 @@ class TransferController extends Controller
         $narration = $request->validated('narration');
 
         try {
-            $result = DB::transaction(function () use ($sender, $recipient, $currency, $amountMinorUnits, $reference, $narration) {
+            $result = DB::transaction(function () use ($sender, $recipient, $currency, $amountMinorUnits) {
 
                 $senderWallet = Wallet::where('user_id', $sender->id)->where('currency', $currency)->firstOrFail();
                 $recipientWallet = Wallet::where('user_id', $recipient->id)->where('currency', $currency)->firstOrFail();
 
-                // Lock both wallets in a CONSISTENT order (lowest id first) to prevent deadlocks
-                // between simultaneous opposite-direction transfers.
                 $firstId = min($senderWallet->id, $recipientWallet->id);
                 $secondId = max($senderWallet->id, $recipientWallet->id);
 
@@ -40,81 +38,26 @@ class TransferController extends Controller
                 $senderWallet = $senderWallet->id === $lockedFirst->id ? $lockedFirst : $lockedSecond;
                 $recipientWallet = $recipientWallet->id === $lockedFirst->id ? $lockedFirst : $lockedSecond;
 
-                // Now both rows are locked and we have the freshest balance possible.
                 if ($senderWallet->balance < $amountMinorUnits) {
-                    // Record the failed attempt for audit purposes, then abort.
-                    $transfer = Transfer::create([
-                        'reference' => $reference,
-                        'sender_id' => $sender->id,
-                        'recipient_id' => $recipient->id,
-                        'sender_wallet_id' => $senderWallet->id,
-                        'recipient_wallet_id' => $recipientWallet->id,
-                        'currency' => $currency,
-                        'amount' => $amountMinorUnits,
-                        'narration' => $narration,
-                        'status' => 'failed',
-                        'failure_reason' => 'Insufficient balance.',
-                    ]);
-
-                    throw new \App\Exceptions\InsufficientBalanceException($transfer);
+                    return ['success' => false];
                 }
 
-                // Debit sender
                 $senderWallet->balance -= $amountMinorUnits;
                 $senderWallet->save();
 
-                // Credit recipient
                 $recipientWallet->balance += $amountMinorUnits;
                 $recipientWallet->save();
 
-                $transfer = Transfer::create([
-                    'reference' => $reference,
-                    'sender_id' => $sender->id,
-                    'recipient_id' => $recipient->id,
-                    'sender_wallet_id' => $senderWallet->id,
-                    'recipient_wallet_id' => $recipientWallet->id,
-                    'currency' => $currency,
-                    'amount' => $amountMinorUnits,
-                    'narration' => $narration,
-                    'status' => 'success',
-                ]);
-
-                $debitTxn = Transaction::create([
-                    'reference' => 'TXN-'.Str::uuid(),
-                    'user_id' => $sender->id,
-                    'wallet_id' => $senderWallet->id,
-                    'type' => 'transfer_debit',
-                    'status' => 'success',
-                    'currency' => $currency,
-                    'amount' => $amountMinorUnits,
-                    'balance_after' => $senderWallet->balance,
-                    'counterparty_user_id' => $recipient->id,
-                    'narration' => $narration,
-                ]);
-
-                $creditTxn = Transaction::create([
-                    'reference' => 'TXN-'.Str::uuid(),
-                    'user_id' => $recipient->id,
-                    'wallet_id' => $recipientWallet->id,
-                    'type' => 'transfer_credit',
-                    'status' => 'success',
-                    'currency' => $currency,
-                    'amount' => $amountMinorUnits,
-                    'balance_after' => $recipientWallet->balance,
-                    'counterparty_user_id' => $sender->id,
-                    'narration' => $narration,
-                ]);
-
-                return compact('transfer', 'debitTxn', 'creditTxn');
+                return [
+                    'success' => true,
+                    'senderWalletId' => $senderWallet->id,
+                    'recipientWalletId' => $recipientWallet->id,
+                    'senderBalanceAfter' => $senderWallet->balance,
+                    'recipientBalanceAfter' => $recipientWallet->balance,
+                ];
             });
-        } catch (\App\Exceptions\InsufficientBalanceException $e) {
-            return response()->json([
-                'message' => 'Transfer failed: insufficient balance.',
-                'transfer' => $e->transfer,
-            ], 422);
         } catch (\Illuminate\Database\QueryException $e) {
             if ($e->getCode() === '23000') {
-                // Reference collision: this exact transfer was already submitted (double-click / retry).
                 $existing = Transfer::where('reference', $reference)->first();
                 return response()->json([
                     'message' => 'Transfer already processed.',
@@ -124,9 +67,70 @@ class TransferController extends Controller
             throw $e;
         }
 
+        if (! $result['success']) {
+            $senderWallet = Wallet::where('user_id', $sender->id)->where('currency', $currency)->first();
+            $recipientWallet = Wallet::where('user_id', $recipient->id)->where('currency', $currency)->first();
+
+            $transfer = Transfer::create([
+                'reference' => $reference,
+                'sender_id' => $sender->id,
+                'recipient_id' => $recipient->id,
+                'sender_wallet_id' => $senderWallet->id,
+                'recipient_wallet_id' => $recipientWallet->id,
+                'currency' => $currency,
+                'amount' => $amountMinorUnits,
+                'narration' => $narration,
+                'status' => 'failed',
+                'failure_reason' => 'Insufficient balance.',
+            ]);
+
+            return response()->json([
+                'message' => 'Transfer failed: insufficient balance.',
+                'transfer' => $transfer,
+            ], 422);
+        }
+
+        $transfer = Transfer::create([
+            'reference' => $reference,
+            'sender_id' => $sender->id,
+            'recipient_id' => $recipient->id,
+            'sender_wallet_id' => $result['senderWalletId'],
+            'recipient_wallet_id' => $result['recipientWalletId'],
+            'currency' => $currency,
+            'amount' => $amountMinorUnits,
+            'narration' => $narration,
+            'status' => 'success',
+        ]);
+
+        Transaction::create([
+            'reference' => 'TXN-'.Str::uuid(),
+            'user_id' => $sender->id,
+            'wallet_id' => $result['senderWalletId'],
+            'type' => 'transfer_debit',
+            'status' => 'success',
+            'currency' => $currency,
+            'amount' => $amountMinorUnits,
+            'balance_after' => $result['senderBalanceAfter'],
+            'counterparty_user_id' => $recipient->id,
+            'narration' => $narration,
+        ]);
+
+        Transaction::create([
+            'reference' => 'TXN-'.Str::uuid(),
+            'user_id' => $recipient->id,
+            'wallet_id' => $result['recipientWalletId'],
+            'type' => 'transfer_credit',
+            'status' => 'success',
+            'currency' => $currency,
+            'amount' => $amountMinorUnits,
+            'balance_after' => $result['recipientBalanceAfter'],
+            'counterparty_user_id' => $sender->id,
+            'narration' => $narration,
+        ]);
+
         return response()->json([
             'message' => 'Transfer successful.',
-            'transfer' => $result['transfer'],
+            'transfer' => $transfer,
         ], 201);
     }
 }
