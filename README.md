@@ -5,7 +5,7 @@ A small fintech wallet app. Users can register, fund a wallet in NGN, USD or USD
 Stack: Laravel (API) + React (frontend)
 
 Live application
-Live app (frontend) https://fintech-wallet-frontend-five.vercel.app
+Live app (frontend) https://fintech-wallet-backend-gules.vercel.app
 API (backend) https://fintech-wallet-backend-9r5c.onrender.com/api
 Repository https://github.com/Abdulrahaman1000/fintech-wallet-backend
 
@@ -16,8 +16,8 @@ Demo accounts
 Two accounts are ready to use. Alice already has funds.
 
 Name Email Password
-Alice PASTE_ALICE_EMAIL PASTE_PASSWORD
-Bob PASTE_BOB_EMAIL PASTE_PASSWORD
+Alice alice@example.com Password123!
+Bob bob@example.com Password123!
 
 You can also register your own accounts from the Register page. Each new user gets NGN, USD and USDT wallets automatically.
 
