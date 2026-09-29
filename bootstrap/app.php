@@ -12,9 +12,10 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
-    ->withMiddleware(function (Middleware $middleware): void {
-        // Never attempt a "login" route redirect for unauthenticated requests —
-        // this is a pure API, there is no web login route to redirect to.
+      ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->append(\Illuminate\Http\Middleware\HandleCors::class);
+
+        // Never attempt a "login" route redirect for unauthenticated requests -
         // Returning null here means Laravel just throws AuthenticationException
         // normally instead of crashing on route('login') not existing.
         $middleware->redirectGuestsTo(fn (Request $request) => null);
